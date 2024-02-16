@@ -4,6 +4,9 @@
   "description": "Small tool to update npm packages",
   "homepage": "https://github.com/zzzz-ach/npm-update-outdated",
   "type": "module",
+  "repository": {
+    "url": "https://github.com/zzzz-ach/npm-update-outdated"
+  },
   "bin": {
     "test": "bin/npmUpdateOutdated.js"
   },
