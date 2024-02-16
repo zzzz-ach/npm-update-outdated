@@ -85,7 +85,8 @@ const updateOutdatedPackage = (rl, packagesToUpdate) => Promise.all(packagesToUp
   rl.write(`Running command npm install ${pp.package}@${pp.version}`);
   rl.write(os.EOL);
   return promisifySpawn(NPM_COMMAND, ['install', `${pp.package}@${pp.version}`]);
-}));
+}))
+  .then(() => Promise.resolve(packagesToUpdate));
 
 const processOutdated = (outdated) => {
   const rl = readline.createInterface({
@@ -106,14 +107,16 @@ const processOutdated = (outdated) => {
   const outdatedPackagesToUpdate = outList.reduce((currentPackagesToUpdate, outdatedPackageToUpdate) => currentPackagesToUpdate
     .then((packagesToUpdate) => processOutdatedPackage(rl, outdatedPackageToUpdate, outHead)
       .then((packageToUpdate) => {
-        packagesToUpdate.push(packageToUpdate);
+        if (packageToUpdate) {
+          packagesToUpdate.push(packageToUpdate);
+        }
         return Promise.resolve(packagesToUpdate);
       })), Promise.resolve([]));
 
   return outdatedPackagesToUpdate
     .then((packagesToUpdate) => updateOutdatedPackage(rl, packagesToUpdate))
-    .then(() => {
-      rl.write('Packages updated');
+    .then((packagesToUpdate) => {
+      rl.write(`${packagesToUpdate.length} package(s) updated`);
       rl.close();
       return Promise.resolve();
     });
