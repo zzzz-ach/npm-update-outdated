@@ -1,5 +1,8 @@
 # Release history
 
+## 1.1.0 - 18.02.2024
+- default prompt choice is 'wanted' version, suggestion of @pprb
+
 ## 1.0.2 - 16.02.2024
 - fix error if no package is updated
 
