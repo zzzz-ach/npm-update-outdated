@@ -63,7 +63,7 @@ const processOutdatedPackage = (rl, outdatedPackage, outHead) => new Promise((re
     name: 'color',
     message: 'Update package',
     choices,
-    initial: 'Wanted',
+    initial: wantedVersion === latestVersion ? 'Latest' : 'Wanted',
   });
 
   prompt.run()
