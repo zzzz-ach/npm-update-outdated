@@ -60,7 +60,7 @@ const processOutdatedPackage = (rl, outdatedPackage, outHead) => new Promise((re
   choices.push({ message: `Latest : ${packageName}@${latestVersion}`, name: 'Latest' });
 
   const prompt = new enquirer.Select({
-    name: 'color',
+    name: 'Select',
     message: 'Update package',
     choices,
     initial: wantedVersion === latestVersion ? 'Latest' : 'Wanted',
@@ -70,7 +70,7 @@ const processOutdatedPackage = (rl, outdatedPackage, outHead) => new Promise((re
     .then((answer) => {
       if (answer !== 'No') {
         resolve({
-          package: packageName,
+          name: packageName,
           version: answer === 'Wanted' ? wantedVersion : latestVersion,
         });
       }
@@ -82,11 +82,11 @@ const processOutdatedPackage = (rl, outdatedPackage, outHead) => new Promise((re
     });
 });
 
-const updateOutdatedPackage = (rl, packagesToUpdate) => Promise.all(packagesToUpdate.map((pp) => {
-  rl.write(`Running command npm install ${pp.package}@${pp.version}`);
+const updateOutdatedPackage = (rl, packagesToUpdate) => packagesToUpdate.reduce((currentPromise, packageToUpdate) => currentPromise.then(() => {
+  rl.write(`Running command npm install ${packageToUpdate.name}@${packageToUpdate.version}`);
   rl.write(os.EOL);
-  return promisifySpawn(NPM_COMMAND, ['install', `${pp.package}@${pp.version}`]);
-}))
+  return promisifySpawn(NPM_COMMAND, ['install', `${packageToUpdate.name}@${packageToUpdate.version}`]);
+}), Promise.resolve())
   .then(() => Promise.resolve(packagesToUpdate));
 
 const processOutdated = (outdated) => {
