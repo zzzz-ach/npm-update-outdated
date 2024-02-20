@@ -1,5 +1,8 @@
 # Release history
 
+## 1.1.2 - 20.02.2024
+- better handling of multiple dependencies update
+
 ## 1.1.1 - 19.02.2024
 - default choice is highest minor version if it is also the latest
 
