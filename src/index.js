@@ -124,6 +124,7 @@ const processOutdated = (outdated) => {
 };
 
 export default function npmUpdateOutdated() {
-  return promisifySpawn(NPM_COMMAND, ['outdated'])
+  return promisifySpawn(NPM_COMMAND, ['ci'])
+    .then(() => promisifySpawn(NPM_COMMAND, ['outdated']))
     .then(processOutdated);
 }
