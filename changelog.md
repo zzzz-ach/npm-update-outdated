@@ -1,4 +1,6 @@
 # Release history
+## 1.2.0 - 01.03.2024
+- added npm ci before npm outdated to install latest referenced dependencies to node_modules
 
 ## 1.1.2 - 20.02.2024
 - better handling of multiple dependencies update
