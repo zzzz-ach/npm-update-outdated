@@ -8,7 +8,7 @@
     "url": "https://github.com/zzzz-ach/npm-update-outdated"
   },
   "bin": {
-    "test": "bin/npmUpdateOutdated.js"
+    "nuo": "bin/npmUpdateOutdated.js"
   },
   "engines": {
     "node": ">=14.18"
