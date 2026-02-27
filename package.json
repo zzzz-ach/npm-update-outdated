@@ -1,6 +1,6 @@
 {
   "name": "@zzzz-ach/npm-update-outdated",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Small tool to update npm packages",
   "homepage": "https://github.com/zzzz-ach/npm-update-outdated",
   "type": "module",
