@@ -37,7 +37,7 @@ const makePretty = (outdatedPackage) => {
   return prettyOutput;
 };
 
-const processOutdatedPackage = (rl, outdatedPackage, outHead) => new Promise((resolve) => {
+const processOutdatedPackage = (rl, outdatedPackage, outHead, options = {}) => new Promise((resolve) => {
   const tableOpts = {
     align: ['l', 'r', 'r', 'r', 'l'],
     stringLength: (s) => util.stripVTControlCharacters(s).length,
@@ -48,6 +48,20 @@ const processOutdatedPackage = (rl, outdatedPackage, outHead) => new Promise((re
   rl.write(os.EOL);
 
   const [packageName, currentVersion, wantedVersion, latestVersion] = outdatedPackage;
+
+  if (options.autoWanted && currentVersion === wantedVersion) {
+    rl.write(`${packageName}@${wantedVersion} (already up to date)`);
+    rl.write(os.EOL);
+    resolve();
+    return;
+  }
+
+  if (options.autoWanted && currentVersion !== wantedVersion) {
+    rl.write(`Auto-selecting wanted version: ${packageName}@${wantedVersion}`);
+    rl.write(os.EOL);
+    resolve({ name: packageName, version: wantedVersion });
+    return;
+  }
 
   const choices = [
     { name: 'No' },
@@ -89,7 +103,7 @@ const updateOutdatedPackage = (rl, packagesToUpdate) => packagesToUpdate.reduce(
 }), Promise.resolve())
   .then(() => Promise.resolve(packagesToUpdate));
 
-const processOutdated = (outdated) => {
+const processOutdated = (outdated, options = {}) => {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -106,7 +120,7 @@ const processOutdated = (outdated) => {
   const outHead = outList.shift();
 
   const outdatedPackagesToUpdate = outList.reduce((currentPackagesToUpdate, outdatedPackageToUpdate) => currentPackagesToUpdate
-    .then((packagesToUpdate) => processOutdatedPackage(rl, outdatedPackageToUpdate, outHead)
+    .then((packagesToUpdate) => processOutdatedPackage(rl, outdatedPackageToUpdate, outHead, options)
       .then((packageToUpdate) => {
         if (packageToUpdate) {
           packagesToUpdate.push(packageToUpdate);
@@ -123,8 +137,8 @@ const processOutdated = (outdated) => {
     });
 };
 
-export default function npmUpdateOutdated() {
+export default function npmUpdateOutdated(options = {}) {
   return promisifySpawn(NPM_COMMAND, ['ci'])
     .then(() => promisifySpawn(NPM_COMMAND, ['outdated']))
-    .then(processOutdated);
+    .then((outdated) => processOutdated(outdated, options));
 }
