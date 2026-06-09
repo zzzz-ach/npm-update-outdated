@@ -132,7 +132,8 @@ const processOutdatedPackage = async (rl, pkg, isWorkspace, options = {}) => {
 
   if (options.autoMinor) {
     const isMajorBump = parseInt(latest.split('.')[0], 10) > parseInt(current.split('.')[0], 10);
-    if (isMajorBump) return undefined;
+    const isPreRelease = latest.includes('-');
+    if (isMajorBump || isPreRelease) return undefined;
     if (current === latest) {
       rl.write(`${name}@${latest} (already up to date)`);
       rl.write(os.EOL);
