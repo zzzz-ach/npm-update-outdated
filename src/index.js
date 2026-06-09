@@ -37,15 +37,41 @@ const detectWorkspaceRootName = () => {
   }
 };
 
+// npm outdated --json values can be an object or an array of objects
+// (array when multiple workspaces depend on the same package)
+const parseOutdatedJson = (outdatedJson) => {
+  const outdatedMap = JSON.parse(outdatedJson || '{}');
+  const packageMap = new Map();
+
+  Object.entries(outdatedMap).forEach(([name, info]) => {
+    const infos = Array.isArray(info) ? info : [info];
+    infos.forEach((i) => {
+      if (!packageMap.has(name)) {
+        packageMap.set(name, {
+          name,
+          current: i.current,
+          wanted: i.wanted,
+          latest: i.latest,
+          dependents: [i.dependent],
+        });
+      } else {
+        packageMap.get(name).dependents.push(i.dependent);
+      }
+    });
+  });
+
+  return Array.from(packageMap.values());
+};
+
 const HEAD = ['Package', 'Current', 'Wanted', 'Latest'];
-const HEAD_WORKSPACE = [...HEAD, 'Workspace'];
+const HEAD_WORKSPACE = [...HEAD, 'Workspaces'];
 
 const makePretty = (pkg, isWorkspace) => {
   const nameColored = pkg.current === pkg.wanted
     ? colors.yellow(pkg.name)
     : colors.red(pkg.name);
   const row = [nameColored, pkg.current, colors.green(pkg.wanted), colors.magenta(pkg.latest)];
-  if (isWorkspace) row.push(colors.cyan(pkg.dependent));
+  if (isWorkspace) row.push(colors.cyan(pkg.dependents.join(', ')));
   return row;
 };
 
@@ -104,14 +130,22 @@ const processOutdatedPackage = async (rl, pkg, isWorkspace, options = {}) => {
 
 const updateOutdatedPackage = async (rl, packagesToUpdate, rootPackageName) => {
   for (const pkg of packagesToUpdate) { // eslint-disable-line no-restricted-syntax
-    const isWorkspaceDep = rootPackageName && pkg.dependent !== rootPackageName;
-    const args = ['install', `${pkg.name}@${pkg.version}`];
-    if (isWorkspaceDep) args.push(`--workspace=${pkg.dependent}`);
+    const workspaceDependents = rootPackageName
+      ? pkg.dependents.filter((d) => d !== rootPackageName)
+      : [];
+    const hasRootDep = !rootPackageName || pkg.dependents.includes(rootPackageName);
 
-    const workspaceLabel = isWorkspaceDep ? ` --workspace=${pkg.dependent}` : '';
-    rl.write(`Running command npm install ${pkg.name}@${pkg.version}${workspaceLabel}`);
-    rl.write(os.EOL);
-    await promisifySpawn(NPM_COMMAND, args); // eslint-disable-line no-await-in-loop
+    if (hasRootDep) {
+      rl.write(`Running command npm install ${pkg.name}@${pkg.version}`);
+      rl.write(os.EOL);
+      await promisifySpawn(NPM_COMMAND, ['install', `${pkg.name}@${pkg.version}`]); // eslint-disable-line no-await-in-loop
+    }
+
+    for (const dependent of workspaceDependents) { // eslint-disable-line no-restricted-syntax
+      rl.write(`Running command npm install ${pkg.name}@${pkg.version} --workspace=${dependent}`);
+      rl.write(os.EOL);
+      await promisifySpawn(NPM_COMMAND, ['install', `${pkg.name}@${pkg.version}`, `--workspace=${dependent}`]); // eslint-disable-line no-await-in-loop
+    }
   }
   return packagesToUpdate;
 };
@@ -124,14 +158,7 @@ const processOutdated = async (outdatedJson, rootPackageName, options = {}) => {
   });
 
   const isWorkspace = !!rootPackageName;
-  const outdatedMap = JSON.parse(outdatedJson || '{}');
-  const packages = Object.entries(outdatedMap).map(([name, info]) => ({
-    name,
-    current: info.current,
-    wanted: info.wanted,
-    latest: info.latest,
-    dependent: info.dependent,
-  }));
+  const packages = parseOutdatedJson(outdatedJson);
 
   if (!packages.length) {
     rl.write('No package to update');
