@@ -28,12 +28,52 @@ const promisifySpawn = (command, args) => new Promise((resolve, reject) => {
   });
 });
 
-const detectWorkspaceRootName = () => {
+// Returns { rootName, resolveWorkspaceName } or { rootName: null } if not a workspace.
+// resolveWorkspaceName maps any identifier (dir name or package name) to the canonical
+// package name required by npm --workspace=<name>.
+const detectWorkspaceInfo = () => {
   try {
-    const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-    return pkg.workspaces ? pkg.name : null;
+    const rootPkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+    if (!rootPkg.workspaces) return { rootName: null };
+
+    const patterns = Array.isArray(rootPkg.workspaces)
+      ? rootPkg.workspaces
+      : (rootPkg.workspaces.packages ?? []);
+
+    const nameMap = new Map();
+    patterns.forEach((pattern) => {
+      const parts = pattern.split('/');
+      const isGlob = parts[parts.length - 1] === '*';
+
+      let searchPaths;
+      if (isGlob) {
+        const base = parts.slice(0, -1).join('/') || '.';
+        try {
+          searchPaths = fs.readdirSync(base, { withFileTypes: true })
+            .filter((d) => d.isDirectory())
+            .map((d) => `${base}/${d.name}`);
+        } catch {
+          searchPaths = [];
+        }
+      } else {
+        searchPaths = [pattern];
+      }
+
+      searchPaths.forEach((wsPath) => {
+        try {
+          const wsPkg = JSON.parse(fs.readFileSync(`${wsPath}/package.json`, 'utf8'));
+          nameMap.set(wsPkg.name, wsPkg.name);
+          nameMap.set(wsPath.split('/').pop(), wsPkg.name);
+        } catch { /* workspace without package.json */ }
+      });
+    });
+
+    return {
+      rootName: rootPkg.name,
+      resolveWorkspaceName: (id) => nameMap.get(id) ?? id,
+    };
   } catch {
-    return null;
+    return { rootName: null };
   }
 };
 
@@ -128,12 +168,12 @@ const processOutdatedPackage = async (rl, pkg, isWorkspace, options = {}) => {
   }
 };
 
-const updateOutdatedPackage = async (rl, packagesToUpdate, rootPackageName) => {
+const updateOutdatedPackage = async (rl, packagesToUpdate, rootName, resolveWorkspaceName) => {
   for (const pkg of packagesToUpdate) { // eslint-disable-line no-restricted-syntax
-    const workspaceDependents = rootPackageName
-      ? pkg.dependents.filter((d) => d !== rootPackageName)
+    const workspaceDependents = rootName
+      ? pkg.dependents.filter((d) => d !== rootName)
       : [];
-    const hasRootDep = !rootPackageName || pkg.dependents.includes(rootPackageName);
+    const hasRootDep = !rootName || pkg.dependents.includes(rootName);
 
     if (hasRootDep) {
       rl.write(`Running command npm install ${pkg.name}@${pkg.version}`);
@@ -142,22 +182,23 @@ const updateOutdatedPackage = async (rl, packagesToUpdate, rootPackageName) => {
     }
 
     for (const dependent of workspaceDependents) { // eslint-disable-line no-restricted-syntax
-      rl.write(`Running command npm install ${pkg.name}@${pkg.version} --workspace=${dependent}`);
+      const wsName = resolveWorkspaceName(dependent);
+      rl.write(`Running command npm install ${pkg.name}@${pkg.version} --workspace=${wsName}`);
       rl.write(os.EOL);
-      await promisifySpawn(NPM_COMMAND, ['install', `${pkg.name}@${pkg.version}`, `--workspace=${dependent}`]); // eslint-disable-line no-await-in-loop
+      await promisifySpawn(NPM_COMMAND, ['install', `${pkg.name}@${pkg.version}`, `--workspace=${wsName}`]); // eslint-disable-line no-await-in-loop
     }
   }
   return packagesToUpdate;
 };
 
-const processOutdated = async (outdatedJson, rootPackageName, options = {}) => {
+const processOutdated = async (outdatedJson, rootName, resolveWorkspaceName, options = {}) => {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     terminal: true,
   });
 
-  const isWorkspace = !!rootPackageName;
+  const isWorkspace = !!rootName;
   const packages = parseOutdatedJson(outdatedJson);
 
   if (!packages.length) {
@@ -172,14 +213,14 @@ const processOutdated = async (outdatedJson, rootPackageName, options = {}) => {
     if (selected) packagesToUpdate.push(selected);
   }
 
-  await updateOutdatedPackage(rl, packagesToUpdate, rootPackageName);
+  await updateOutdatedPackage(rl, packagesToUpdate, rootName, resolveWorkspaceName);
   rl.write(`${packagesToUpdate.length} package(s) updated`);
   rl.close();
 };
 
 export default async function npmUpdateOutdated(options = {}) {
-  const rootPackageName = detectWorkspaceRootName();
+  const { rootName, resolveWorkspaceName = (id) => id } = detectWorkspaceInfo();
   await promisifySpawn(NPM_COMMAND, ['ci']);
   const outdated = await promisifySpawn(NPM_COMMAND, ['outdated', '--json']);
-  return processOutdated(outdated, rootPackageName, options);
+  return processOutdated(outdated, rootName, resolveWorkspaceName, options);
 }
