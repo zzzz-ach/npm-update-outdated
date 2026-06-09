@@ -1,4 +1,5 @@
 import os from 'node:os';
+import fs from 'node:fs';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import util from 'node:util';
@@ -27,118 +28,200 @@ const promisifySpawn = (command, args) => new Promise((resolve, reject) => {
   });
 });
 
-const makePretty = (outdatedPackage) => {
-  const prettyOutput = outdatedPackage.slice();
-  prettyOutput[0] = prettyOutput[1] === prettyOutput[2]
-    ? colors.yellow(prettyOutput[0])
-    : colors.red(prettyOutput[0]);
-  prettyOutput[2] = colors.green(prettyOutput[2]);
-  prettyOutput[3] = colors.magenta(prettyOutput[3]);
-  return prettyOutput;
+// Returns { rootName, resolveWorkspaceName } or { rootName: null } if not a workspace.
+// resolveWorkspaceName maps any identifier (dir name or package name) to the canonical
+// package name required by npm --workspace=<name>.
+const detectWorkspaceInfo = () => {
+  try {
+    const rootPkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+    if (!rootPkg.workspaces) return { rootName: null };
+
+    const patterns = Array.isArray(rootPkg.workspaces)
+      ? rootPkg.workspaces
+      : (rootPkg.workspaces.packages ?? []);
+
+    const nameMap = new Map();
+    patterns.forEach((pattern) => {
+      const parts = pattern.split('/');
+      const isGlob = parts[parts.length - 1] === '*';
+
+      let searchPaths;
+      if (isGlob) {
+        const base = parts.slice(0, -1).join('/') || '.';
+        try {
+          searchPaths = fs.readdirSync(base, { withFileTypes: true })
+            .filter((d) => d.isDirectory())
+            .map((d) => `${base}/${d.name}`);
+        } catch {
+          searchPaths = [];
+        }
+      } else {
+        searchPaths = [pattern];
+      }
+
+      searchPaths.forEach((wsPath) => {
+        try {
+          const wsPkg = JSON.parse(fs.readFileSync(`${wsPath}/package.json`, 'utf8'));
+          nameMap.set(wsPkg.name, wsPkg.name);
+          nameMap.set(wsPath.split('/').pop(), wsPkg.name);
+        } catch { /* workspace without package.json */ }
+      });
+    });
+
+    return {
+      rootName: rootPkg.name,
+      resolveWorkspaceName: (id) => nameMap.get(id) ?? id,
+    };
+  } catch {
+    return { rootName: null };
+  }
 };
 
-const processOutdatedPackage = (rl, outdatedPackage, outHead, options = {}) => new Promise((resolve) => {
+// npm outdated --json values can be an object or an array of objects
+// (array when multiple workspaces depend on the same package)
+const parseOutdatedJson = (outdatedJson) => {
+  const outdatedMap = JSON.parse(outdatedJson || '{}');
+  const packageMap = new Map();
+
+  Object.entries(outdatedMap).forEach(([name, info]) => {
+    const infos = Array.isArray(info) ? info : [info];
+    infos.forEach((i) => {
+      if (!packageMap.has(name)) {
+        packageMap.set(name, {
+          name,
+          current: i.current,
+          wanted: i.wanted,
+          latest: i.latest,
+          dependents: [i.dependent],
+        });
+      } else {
+        packageMap.get(name).dependents.push(i.dependent);
+      }
+    });
+  });
+
+  return Array.from(packageMap.values());
+};
+
+const HEAD = ['Package', 'Current', 'Wanted', 'Latest'];
+const HEAD_WORKSPACE = [...HEAD, 'Workspaces'];
+
+const makePretty = (pkg, isWorkspace) => {
+  const nameColored = pkg.current === pkg.wanted
+    ? colors.yellow(pkg.name)
+    : colors.red(pkg.name);
+  const row = [nameColored, pkg.current, colors.green(pkg.wanted), colors.magenta(pkg.latest)];
+  if (isWorkspace) row.push(colors.cyan(pkg.dependents.join(', ')));
+  return row;
+};
+
+const processOutdatedPackage = async (rl, pkg, isWorkspace, options = {}) => {
   const tableOpts = {
     align: ['l', 'r', 'r', 'r', 'l'],
     stringLength: (s) => util.stripVTControlCharacters(s).length,
   };
+  const head = isWorkspace ? HEAD_WORKSPACE : HEAD;
   rl.write('Package to update :');
   rl.write(os.EOL);
-  rl.write(table([outHead.map((x) => colors.underline(x)), makePretty(outdatedPackage)], tableOpts));
+  rl.write(table([head.map((x) => colors.underline(x)), makePretty(pkg, isWorkspace)], tableOpts));
   rl.write(os.EOL);
 
-  const [packageName, currentVersion, wantedVersion, latestVersion] = outdatedPackage;
+  const {
+    name, current, wanted, latest,
+  } = pkg;
 
-  if (options.autoWanted && currentVersion === wantedVersion) {
-    rl.write(`${packageName}@${wantedVersion} (already up to date)`);
+  if (options.autoMinor) {
+    const isMajorBump = parseInt(latest.split('.')[0], 10) > parseInt(current.split('.')[0], 10);
+    if (isMajorBump) return undefined;
+    if (current === latest) {
+      rl.write(`${name}@${latest} (already up to date)`);
+      rl.write(os.EOL);
+      return undefined;
+    }
+    rl.write(`Auto-selecting: ${name}@${latest}`);
     rl.write(os.EOL);
-    resolve();
-    return;
+    return { ...pkg, version: latest };
   }
 
-  if (options.autoWanted && currentVersion !== wantedVersion) {
-    rl.write(`Auto-selecting wanted version: ${packageName}@${wantedVersion}`);
-    rl.write(os.EOL);
-    resolve({ name: packageName, version: wantedVersion });
-    return;
+  const choices = [{ name: 'No' }];
+
+  if (current !== wanted && wanted !== latest) {
+    choices.push({ message: `Wanted : ${name}@${wanted}`, name: 'Wanted' });
   }
 
-  const choices = [
-    { name: 'No' },
-  ];
-
-  if (currentVersion !== wantedVersion && wantedVersion !== latestVersion) {
-    choices.push({ message: `Wanted : ${packageName}@${wantedVersion}`, name: 'Wanted' });
-  }
-
-  choices.push({ message: `Latest : ${packageName}@${latestVersion}`, name: 'Latest' });
+  choices.push({ message: `Latest : ${name}@${latest}`, name: 'Latest' });
 
   const prompt = new enquirer.Select({
     name: 'Select',
     message: 'Update package',
     choices,
-    initial: wantedVersion === latestVersion ? 'Latest' : 'Wanted',
+    initial: wanted === latest ? 'Latest' : 'Wanted',
   });
 
-  prompt.run()
-    .then((answer) => {
-      if (answer !== 'No') {
-        resolve({
-          name: packageName,
-          version: answer === 'Wanted' ? wantedVersion : latestVersion,
-        });
-      }
-      resolve();
-    })
-    .catch(() => {
-      rl.close();
-      process.exit(-1);
-    });
-});
+  try {
+    const answer = await prompt.run();
+    if (answer === 'No') return undefined;
+    return { ...pkg, version: answer === 'Wanted' ? wanted : latest };
+  } catch {
+    rl.close();
+    process.exit(-1);
+    return undefined;
+  }
+};
 
-const updateOutdatedPackage = (rl, packagesToUpdate) => packagesToUpdate.reduce((currentPromise, packageToUpdate) => currentPromise.then(() => {
-  rl.write(`Running command npm install ${packageToUpdate.name}@${packageToUpdate.version}`);
-  rl.write(os.EOL);
-  return promisifySpawn(NPM_COMMAND, ['install', `${packageToUpdate.name}@${packageToUpdate.version}`]);
-}), Promise.resolve())
-  .then(() => Promise.resolve(packagesToUpdate));
+const updateOutdatedPackage = async (rl, packagesToUpdate, rootName, resolveWorkspaceName) => {
+  for (const pkg of packagesToUpdate) { // eslint-disable-line no-restricted-syntax
+    const workspaceDependents = rootName
+      ? pkg.dependents.filter((d) => d !== rootName)
+      : [];
+    const hasRootDep = !rootName || pkg.dependents.includes(rootName);
 
-const processOutdated = (outdated, options = {}) => {
+    if (hasRootDep) {
+      rl.write(`Running command npm install ${pkg.name}@${pkg.version}`);
+      rl.write(os.EOL);
+      await promisifySpawn(NPM_COMMAND, ['install', `${pkg.name}@${pkg.version}`]); // eslint-disable-line no-await-in-loop
+    }
+
+    for (const dependent of workspaceDependents) { // eslint-disable-line no-restricted-syntax
+      const wsName = resolveWorkspaceName(dependent);
+      rl.write(`Running command npm install ${pkg.name}@${pkg.version} --workspace=${wsName}`);
+      rl.write(os.EOL);
+      await promisifySpawn(NPM_COMMAND, ['install', `${pkg.name}@${pkg.version}`, `--workspace=${wsName}`]); // eslint-disable-line no-await-in-loop
+    }
+  }
+  return packagesToUpdate;
+};
+
+const processOutdated = async (outdatedJson, rootName, resolveWorkspaceName, options = {}) => {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     terminal: true,
   });
 
-  if (!outdated.length) {
+  const isWorkspace = !!rootName;
+  const packages = parseOutdatedJson(outdatedJson);
+
+  if (!packages.length) {
     rl.write('No package to update');
     rl.close();
     process.exit(0);
   }
 
-  const outList = outdated.split('\n').filter((p) => p).map((line) => line.split(/[ ]{2,}/));
-  const outHead = outList.shift();
+  const packagesToUpdate = [];
+  for (const pkg of packages) { // eslint-disable-line no-restricted-syntax
+    const selected = await processOutdatedPackage(rl, pkg, isWorkspace, options); // eslint-disable-line no-await-in-loop
+    if (selected) packagesToUpdate.push(selected);
+  }
 
-  const outdatedPackagesToUpdate = outList.reduce((currentPackagesToUpdate, outdatedPackageToUpdate) => currentPackagesToUpdate
-    .then((packagesToUpdate) => processOutdatedPackage(rl, outdatedPackageToUpdate, outHead, options)
-      .then((packageToUpdate) => {
-        if (packageToUpdate) {
-          packagesToUpdate.push(packageToUpdate);
-        }
-        return Promise.resolve(packagesToUpdate);
-      })), Promise.resolve([]));
-
-  return outdatedPackagesToUpdate
-    .then((packagesToUpdate) => updateOutdatedPackage(rl, packagesToUpdate))
-    .then((packagesToUpdate) => {
-      rl.write(`${packagesToUpdate.length} package(s) updated`);
-      rl.close();
-      return Promise.resolve();
-    });
+  await updateOutdatedPackage(rl, packagesToUpdate, rootName, resolveWorkspaceName);
+  rl.write(`${packagesToUpdate.length} package(s) updated`);
+  rl.close();
 };
 
-export default function npmUpdateOutdated(options = {}) {
-  return promisifySpawn(NPM_COMMAND, ['ci'])
-    .then(() => promisifySpawn(NPM_COMMAND, ['outdated']))
-    .then((outdated) => processOutdated(outdated, options));
+export default async function npmUpdateOutdated(options = {}) {
+  const { rootName, resolveWorkspaceName = (id) => id } = detectWorkspaceInfo();
+  await promisifySpawn(NPM_COMMAND, ['ci']);
+  const outdated = await promisifySpawn(NPM_COMMAND, ['outdated', '--json']);
+  return processOutdated(outdated, rootName, resolveWorkspaceName, options);
 }

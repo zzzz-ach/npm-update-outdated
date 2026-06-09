@@ -3,6 +3,6 @@
 import npmUpdateOutdated from '../src/index.js';
 
 const args = process.argv.slice(2);
-const autoWanted = args.includes('--auto-wanted') || args.includes('-w');
+const autoMinor = args.includes('--auto-minor') || args.includes('-m');
 
-npmUpdateOutdated({ autoWanted });
+npmUpdateOutdated({ autoMinor });
