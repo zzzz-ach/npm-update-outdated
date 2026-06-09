@@ -37,7 +37,7 @@ const makePretty = (outdatedPackage) => {
   return prettyOutput;
 };
 
-const processOutdatedPackage = (rl, outdatedPackage, outHead, options = {}) => new Promise((resolve) => {
+const processOutdatedPackage = async (rl, outdatedPackage, outHead, options = {}) => {
   const tableOpts = {
     align: ['l', 'r', 'r', 'r', 'l'],
     stringLength: (s) => util.stripVTControlCharacters(s).length,
@@ -52,20 +52,16 @@ const processOutdatedPackage = (rl, outdatedPackage, outHead, options = {}) => n
   if (options.autoWanted && currentVersion === wantedVersion) {
     rl.write(`${packageName}@${wantedVersion} (already up to date)`);
     rl.write(os.EOL);
-    resolve();
-    return;
+    return undefined;
   }
 
   if (options.autoWanted && currentVersion !== wantedVersion) {
     rl.write(`Auto-selecting wanted version: ${packageName}@${wantedVersion}`);
     rl.write(os.EOL);
-    resolve({ name: packageName, version: wantedVersion });
-    return;
+    return { name: packageName, version: wantedVersion };
   }
 
-  const choices = [
-    { name: 'No' },
-  ];
+  const choices = [{ name: 'No' }];
 
   if (currentVersion !== wantedVersion && wantedVersion !== latestVersion) {
     choices.push({ message: `Wanted : ${packageName}@${wantedVersion}`, name: 'Wanted' });
@@ -80,30 +76,27 @@ const processOutdatedPackage = (rl, outdatedPackage, outHead, options = {}) => n
     initial: wantedVersion === latestVersion ? 'Latest' : 'Wanted',
   });
 
-  prompt.run()
-    .then((answer) => {
-      if (answer !== 'No') {
-        resolve({
-          name: packageName,
-          version: answer === 'Wanted' ? wantedVersion : latestVersion,
-        });
-      }
-      resolve();
-    })
-    .catch(() => {
-      rl.close();
-      process.exit(-1);
-    });
-});
+  try {
+    const answer = await prompt.run();
+    if (answer === 'No') return undefined;
+    return { name: packageName, version: answer === 'Wanted' ? wantedVersion : latestVersion };
+  } catch {
+    rl.close();
+    process.exit(-1);
+    return undefined;
+  }
+};
 
-const updateOutdatedPackage = (rl, packagesToUpdate) => packagesToUpdate.reduce((currentPromise, packageToUpdate) => currentPromise.then(() => {
-  rl.write(`Running command npm install ${packageToUpdate.name}@${packageToUpdate.version}`);
-  rl.write(os.EOL);
-  return promisifySpawn(NPM_COMMAND, ['install', `${packageToUpdate.name}@${packageToUpdate.version}`]);
-}), Promise.resolve())
-  .then(() => Promise.resolve(packagesToUpdate));
+const updateOutdatedPackage = async (rl, packagesToUpdate) => {
+  for (const packageToUpdate of packagesToUpdate) { // eslint-disable-line no-restricted-syntax
+    rl.write(`Running command npm install ${packageToUpdate.name}@${packageToUpdate.version}`);
+    rl.write(os.EOL);
+    await promisifySpawn(NPM_COMMAND, ['install', `${packageToUpdate.name}@${packageToUpdate.version}`]); // eslint-disable-line no-await-in-loop
+  }
+  return packagesToUpdate;
+};
 
-const processOutdated = (outdated, options = {}) => {
+const processOutdated = async (outdated, options = {}) => {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -119,26 +112,19 @@ const processOutdated = (outdated, options = {}) => {
   const outList = outdated.split('\n').filter((p) => p).map((line) => line.split(/[ ]{2,}/));
   const outHead = outList.shift();
 
-  const outdatedPackagesToUpdate = outList.reduce((currentPackagesToUpdate, outdatedPackageToUpdate) => currentPackagesToUpdate
-    .then((packagesToUpdate) => processOutdatedPackage(rl, outdatedPackageToUpdate, outHead, options)
-      .then((packageToUpdate) => {
-        if (packageToUpdate) {
-          packagesToUpdate.push(packageToUpdate);
-        }
-        return Promise.resolve(packagesToUpdate);
-      })), Promise.resolve([]));
+  const packagesToUpdate = [];
+  for (const outdatedPackageToUpdate of outList) { // eslint-disable-line no-restricted-syntax
+    const packageToUpdate = await processOutdatedPackage(rl, outdatedPackageToUpdate, outHead, options); // eslint-disable-line no-await-in-loop
+    if (packageToUpdate) packagesToUpdate.push(packageToUpdate);
+  }
 
-  return outdatedPackagesToUpdate
-    .then((packagesToUpdate) => updateOutdatedPackage(rl, packagesToUpdate))
-    .then((packagesToUpdate) => {
-      rl.write(`${packagesToUpdate.length} package(s) updated`);
-      rl.close();
-      return Promise.resolve();
-    });
+  await updateOutdatedPackage(rl, packagesToUpdate);
+  rl.write(`${packagesToUpdate.length} package(s) updated`);
+  rl.close();
 };
 
-export default function npmUpdateOutdated(options = {}) {
-  return promisifySpawn(NPM_COMMAND, ['ci'])
-    .then(() => promisifySpawn(NPM_COMMAND, ['outdated']))
-    .then((outdated) => processOutdated(outdated, options));
+export default async function npmUpdateOutdated(options = {}) {
+  await promisifySpawn(NPM_COMMAND, ['ci']);
+  const outdated = await promisifySpawn(NPM_COMMAND, ['outdated']);
+  return processOutdated(outdated, options);
 }
