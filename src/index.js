@@ -170,7 +170,7 @@ const processOutdatedPackage = async (rl, pkg, isWorkspace, options = {}) => {
 };
 
 const updateOutdatedPackage = async (rl, packagesToUpdate, rootName, resolveWorkspaceName) => {
-  for (const pkg of packagesToUpdate) { // eslint-disable-line no-restricted-syntax
+  for (const pkg of packagesToUpdate) {  
     const workspaceDependents = rootName
       ? pkg.dependents.filter((d) => d !== rootName)
       : [];
@@ -179,14 +179,14 @@ const updateOutdatedPackage = async (rl, packagesToUpdate, rootName, resolveWork
     if (hasRootDep) {
       rl.write(`Running command npm install ${pkg.name}@${pkg.version}`);
       rl.write(os.EOL);
-      await promisifySpawn(NPM_COMMAND, ['install', `${pkg.name}@${pkg.version}`]); // eslint-disable-line no-await-in-loop
+      await promisifySpawn(NPM_COMMAND, ['install', `${pkg.name}@${pkg.version}`]);  
     }
 
-    for (const dependent of workspaceDependents) { // eslint-disable-line no-restricted-syntax
+    for (const dependent of workspaceDependents) {  
       const wsName = resolveWorkspaceName(dependent);
       rl.write(`Running command npm install ${pkg.name}@${pkg.version} --workspace=${wsName}`);
       rl.write(os.EOL);
-      await promisifySpawn(NPM_COMMAND, ['install', `${pkg.name}@${pkg.version}`, `--workspace=${wsName}`]); // eslint-disable-line no-await-in-loop
+      await promisifySpawn(NPM_COMMAND, ['install', `${pkg.name}@${pkg.version}`, `--workspace=${wsName}`]);  
     }
   }
   return packagesToUpdate;
@@ -209,8 +209,8 @@ const processOutdated = async (outdatedJson, rootName, resolveWorkspaceName, opt
   }
 
   const packagesToUpdate = [];
-  for (const pkg of packages) { // eslint-disable-line no-restricted-syntax
-    const selected = await processOutdatedPackage(rl, pkg, isWorkspace, options); // eslint-disable-line no-await-in-loop
+  for (const pkg of packages) {  
+    const selected = await processOutdatedPackage(rl, pkg, isWorkspace, options);  
     if (selected) packagesToUpdate.push(selected);
   }
 
