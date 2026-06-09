@@ -131,17 +131,20 @@ const processOutdatedPackage = async (rl, pkg, isWorkspace, options = {}) => {
   } = pkg;
 
   if (options.autoMinor) {
-    const isMajorBump = parseInt(latest.split('.')[0], 10) > parseInt(current.split('.')[0], 10);
-    const isPreRelease = latest.includes('-');
-    if (isMajorBump || isPreRelease) return undefined;
-    if (current === latest) {
-      rl.write(`${name}@${latest} (already up to date)`);
+    const currentMajor = parseInt(current.split('.')[0], 10);
+    const isLatestUnsuitable = latest.includes('-') || parseInt(latest.split('.')[0], 10) > currentMajor;
+    // If latest is a pre-release or a major bump, fall back to wanted
+    const target = isLatestUnsuitable ? wanted : latest;
+    // Skip if the fallback target is itself a pre-release or a major bump
+    if (target.includes('-') || parseInt(target.split('.')[0], 10) > currentMajor) return undefined;
+    if (target === current) {
+      rl.write(`${name}@${target} (already up to date)`);
       rl.write(os.EOL);
       return undefined;
     }
-    rl.write(`Auto-selecting: ${name}@${latest}`);
+    rl.write(`Auto-selecting: ${name}@${target}`);
     rl.write(os.EOL);
-    return { ...pkg, version: latest };
+    return { ...pkg, version: target };
   }
 
   const choices = [{ name: 'No' }];
