@@ -1,4 +1,5 @@
 import os from 'node:os';
+import fs from 'node:fs';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import util from 'node:util';
@@ -27,59 +28,73 @@ const promisifySpawn = (command, args) => new Promise((resolve, reject) => {
   });
 });
 
-const makePretty = (outdatedPackage) => {
-  const prettyOutput = outdatedPackage.slice();
-  prettyOutput[0] = prettyOutput[1] === prettyOutput[2]
-    ? colors.yellow(prettyOutput[0])
-    : colors.red(prettyOutput[0]);
-  prettyOutput[2] = colors.green(prettyOutput[2]);
-  prettyOutput[3] = colors.magenta(prettyOutput[3]);
-  return prettyOutput;
+const detectWorkspaceRootName = () => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+    return pkg.workspaces ? pkg.name : null;
+  } catch {
+    return null;
+  }
 };
 
-const processOutdatedPackage = async (rl, outdatedPackage, outHead, options = {}) => {
+const HEAD = ['Package', 'Current', 'Wanted', 'Latest'];
+const HEAD_WORKSPACE = [...HEAD, 'Workspace'];
+
+const makePretty = (pkg, isWorkspace) => {
+  const nameColored = pkg.current === pkg.wanted
+    ? colors.yellow(pkg.name)
+    : colors.red(pkg.name);
+  const row = [nameColored, pkg.current, colors.green(pkg.wanted), colors.magenta(pkg.latest)];
+  if (isWorkspace) row.push(colors.cyan(pkg.dependent));
+  return row;
+};
+
+const processOutdatedPackage = async (rl, pkg, isWorkspace, options = {}) => {
   const tableOpts = {
     align: ['l', 'r', 'r', 'r', 'l'],
     stringLength: (s) => util.stripVTControlCharacters(s).length,
   };
+  const head = isWorkspace ? HEAD_WORKSPACE : HEAD;
   rl.write('Package to update :');
   rl.write(os.EOL);
-  rl.write(table([outHead.map((x) => colors.underline(x)), makePretty(outdatedPackage)], tableOpts));
+  rl.write(table([head.map((x) => colors.underline(x)), makePretty(pkg, isWorkspace)], tableOpts));
   rl.write(os.EOL);
 
-  const [packageName, currentVersion, wantedVersion, latestVersion] = outdatedPackage;
+  const {
+    name, current, wanted, latest,
+  } = pkg;
 
-  if (options.autoWanted && currentVersion === wantedVersion) {
-    rl.write(`${packageName}@${wantedVersion} (already up to date)`);
+  if (options.autoWanted && current === wanted) {
+    rl.write(`${name}@${wanted} (already up to date)`);
     rl.write(os.EOL);
     return undefined;
   }
 
-  if (options.autoWanted && currentVersion !== wantedVersion) {
-    rl.write(`Auto-selecting wanted version: ${packageName}@${wantedVersion}`);
+  if (options.autoWanted && current !== wanted) {
+    rl.write(`Auto-selecting wanted version: ${name}@${wanted}`);
     rl.write(os.EOL);
-    return { name: packageName, version: wantedVersion };
+    return { ...pkg, version: wanted };
   }
 
   const choices = [{ name: 'No' }];
 
-  if (currentVersion !== wantedVersion && wantedVersion !== latestVersion) {
-    choices.push({ message: `Wanted : ${packageName}@${wantedVersion}`, name: 'Wanted' });
+  if (current !== wanted && wanted !== latest) {
+    choices.push({ message: `Wanted : ${name}@${wanted}`, name: 'Wanted' });
   }
 
-  choices.push({ message: `Latest : ${packageName}@${latestVersion}`, name: 'Latest' });
+  choices.push({ message: `Latest : ${name}@${latest}`, name: 'Latest' });
 
   const prompt = new enquirer.Select({
     name: 'Select',
     message: 'Update package',
     choices,
-    initial: wantedVersion === latestVersion ? 'Latest' : 'Wanted',
+    initial: wanted === latest ? 'Latest' : 'Wanted',
   });
 
   try {
     const answer = await prompt.run();
     if (answer === 'No') return undefined;
-    return { name: packageName, version: answer === 'Wanted' ? wantedVersion : latestVersion };
+    return { ...pkg, version: answer === 'Wanted' ? wanted : latest };
   } catch {
     rl.close();
     process.exit(-1);
@@ -87,44 +102,57 @@ const processOutdatedPackage = async (rl, outdatedPackage, outHead, options = {}
   }
 };
 
-const updateOutdatedPackage = async (rl, packagesToUpdate) => {
-  for (const packageToUpdate of packagesToUpdate) { // eslint-disable-line no-restricted-syntax
-    rl.write(`Running command npm install ${packageToUpdate.name}@${packageToUpdate.version}`);
+const updateOutdatedPackage = async (rl, packagesToUpdate, rootPackageName) => {
+  for (const pkg of packagesToUpdate) { // eslint-disable-line no-restricted-syntax
+    const isWorkspaceDep = rootPackageName && pkg.dependent !== rootPackageName;
+    const args = ['install', `${pkg.name}@${pkg.version}`];
+    if (isWorkspaceDep) args.push(`--workspace=${pkg.dependent}`);
+
+    const workspaceLabel = isWorkspaceDep ? ` --workspace=${pkg.dependent}` : '';
+    rl.write(`Running command npm install ${pkg.name}@${pkg.version}${workspaceLabel}`);
     rl.write(os.EOL);
-    await promisifySpawn(NPM_COMMAND, ['install', `${packageToUpdate.name}@${packageToUpdate.version}`]); // eslint-disable-line no-await-in-loop
+    await promisifySpawn(NPM_COMMAND, args); // eslint-disable-line no-await-in-loop
   }
   return packagesToUpdate;
 };
 
-const processOutdated = async (outdated, options = {}) => {
+const processOutdated = async (outdatedJson, rootPackageName, options = {}) => {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     terminal: true,
   });
 
-  if (!outdated.length) {
+  const isWorkspace = !!rootPackageName;
+  const outdatedMap = JSON.parse(outdatedJson || '{}');
+  const packages = Object.entries(outdatedMap).map(([name, info]) => ({
+    name,
+    current: info.current,
+    wanted: info.wanted,
+    latest: info.latest,
+    dependent: info.dependent,
+  }));
+
+  if (!packages.length) {
     rl.write('No package to update');
     rl.close();
     process.exit(0);
   }
 
-  const outList = outdated.split('\n').filter((p) => p).map((line) => line.split(/[ ]{2,}/));
-  const outHead = outList.shift();
-
   const packagesToUpdate = [];
-  for (const outdatedPackageToUpdate of outList) { // eslint-disable-line no-restricted-syntax
-    const packageToUpdate = await processOutdatedPackage(rl, outdatedPackageToUpdate, outHead, options); // eslint-disable-line no-await-in-loop
-    if (packageToUpdate) packagesToUpdate.push(packageToUpdate);
+  for (const pkg of packages) { // eslint-disable-line no-restricted-syntax
+    const selected = await processOutdatedPackage(rl, pkg, isWorkspace, options); // eslint-disable-line no-await-in-loop
+    if (selected) packagesToUpdate.push(selected);
   }
 
-  await updateOutdatedPackage(rl, packagesToUpdate);
+  await updateOutdatedPackage(rl, packagesToUpdate, rootPackageName);
   rl.write(`${packagesToUpdate.length} package(s) updated`);
   rl.close();
 };
 
 export default async function npmUpdateOutdated(options = {}) {
+  const rootPackageName = detectWorkspaceRootName();
   await promisifySpawn(NPM_COMMAND, ['ci']);
-  const outdated = await promisifySpawn(NPM_COMMAND, ['outdated']);
-  return processOutdated(outdated, options);
+  const outdated = await promisifySpawn(NPM_COMMAND, ['outdated', '--json']);
+  return processOutdated(outdated, rootPackageName, options);
 }
