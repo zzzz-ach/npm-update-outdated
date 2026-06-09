@@ -130,16 +130,17 @@ const processOutdatedPackage = async (rl, pkg, isWorkspace, options = {}) => {
     name, current, wanted, latest,
   } = pkg;
 
-  if (options.autoWanted && current === wanted) {
-    rl.write(`${name}@${wanted} (already up to date)`);
+  if (options.autoMinor) {
+    const isMajorBump = parseInt(latest.split('.')[0], 10) > parseInt(current.split('.')[0], 10);
+    if (isMajorBump) return undefined;
+    if (current === latest) {
+      rl.write(`${name}@${latest} (already up to date)`);
+      rl.write(os.EOL);
+      return undefined;
+    }
+    rl.write(`Auto-selecting: ${name}@${latest}`);
     rl.write(os.EOL);
-    return undefined;
-  }
-
-  if (options.autoWanted && current !== wanted) {
-    rl.write(`Auto-selecting wanted version: ${name}@${wanted}`);
-    rl.write(os.EOL);
-    return { ...pkg, version: wanted };
+    return { ...pkg, version: latest };
   }
 
   const choices = [{ name: 'No' }];
